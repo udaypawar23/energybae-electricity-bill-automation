@@ -1,54 +1,83 @@
 import streamlit as st
-import pytesseract
+import easyocr
 from PIL import Image
 import openpyxl
 import re
+import numpy as np
 
+# --------------------------------
+# APP TITLE
+# --------------------------------
 
-
-# App Title
 st.title("EnergyBae Solar Load Calculator")
 
 st.markdown(
     "Upload electricity bill and generate solar Excel automatically."
 )
 
-# Upload File
+# --------------------------------
+# FILE UPLOAD
+# --------------------------------
+
 uploaded_file = st.file_uploader(
     "Upload Electricity Bill",
     type=["jpg", "jpeg", "png"]
 )
 
-# If file uploaded
+# --------------------------------
+# OCR READER
+# --------------------------------
+
+reader = easyocr.Reader(['en'], gpu=False)
+
+# --------------------------------
+# PROCESS FILE
+# --------------------------------
+
 if uploaded_file:
 
-    # Open image
+    # Open Image
     image = Image.open(uploaded_file)
 
-    # Display image
+    # Show Image
     st.image(image, caption="Uploaded Bill")
 
-    # OCR Text Extraction
-    text = pytesseract.image_to_string(image)
+    # Convert image
+    image_np = np.array(image)
 
-    # Show OCR Text
+    st.write("Processing bill... please wait")
+
+    # OCR Extraction
+    results = reader.readtext(
+        image_np,
+        detail=0
+    )
+
+    # Convert list to text
+    text = " ".join(results)
+
+    # --------------------------------
+    # SHOW OCR TEXT
+    # --------------------------------
+
     st.subheader("Extracted Text")
+
     st.write(text)
 
     # --------------------------------
     # CONSUMER NUMBER
     # --------------------------------
 
+    consumer_number = "Not Found"
+
     consumer_match = re.search(
         r'\d{10,15}',
         text
     )
 
-    consumer_number = (
-        consumer_match.group()
-        if consumer_match
-        else "Not Found"
-    )
+    if consumer_match:
+
+        consumer_number = consumer_match.group()
 
     # --------------------------------
     # UNITS EXTRACTION
@@ -56,70 +85,119 @@ if uploaded_file:
 
     units = "Not Found"
 
-    # First sample bill
-    if "1460" in text:
+    unit_patterns = [
+        r'(\d+)\s*kWh',
+        r'(\d+)\s*Units',
+        r'Units\s*[:\-]?\s*(\d+)',
+        r'Consumption\s*[:\-]?\s*(\d+)',
+        r'Consumed\s*[:\-]?\s*(\d+)'
+    ]
 
-        units = "25"
+    for pattern in unit_patterns:
 
-    # Second sample bill
-    elif "3440" in text:
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
 
-        units = "137"
+        if match:
+
+            value = int(match.group(1))
+
+            # Ignore huge wrong numbers
+            if value < 5000:
+
+                units = value
+
+                break
 
     # Backup logic
-    else:
+    if units == "Not Found":
 
-        units_match = re.search(
-            r'(\d{2,3})\s*(?:Units|UNIT|units|kWh)',
+        possible_numbers = re.findall(
+            r'\b\d{2,4}\b',
             text
         )
 
-        if units_match:
+        filtered = []
 
-            units = units_match.group(1)
+        for num in possible_numbers:
+
+            value = int(num)
+
+            # Typical electricity unit range
+            if 10 <= value <= 2000:
+
+                filtered.append(value)
+
+        if filtered:
+
+            units = filtered[0]
 
     # --------------------------------
     # LOAD EXTRACTION
     # --------------------------------
 
+    load = "Not Found"
+
     load_match = re.search(
-        r'(\d+\.\d+)\s*KW',
-        text
+        r'(\d+\.?\d*)\s*KW',
+        text,
+        re.IGNORECASE
     )
 
-    load = (
-        load_match.group(1)
-        if load_match
-        else "Not Found"
-    )
+    if load_match:
+
+        load = load_match.group(1)
 
     # --------------------------------
-    # BILL AMOUNT
+    # BILL AMOUNT EXTRACTION
     # --------------------------------
 
     amount = "Not Found"
 
-    # First sample bill
-    if "1460" in text:
+    amount_patterns = [
+        r'Bill Amount\s*[:\-]?\s*(\d+)',
+        r'Current Bill\s*[:\-]?\s*(\d+)',
+        r'Amount\s*[:\-]?\s*(\d+)'
+    ]
 
-        amount = "1460"
+    for pattern in amount_patterns:
 
-    # Second sample bill
-    elif "3440" in text:
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
 
-        amount = "3440"
+        if match:
+
+            amount = match.group(1)
+
+            break
 
     # Backup logic
-    else:
+    if amount == "Not Found":
 
-        amount_match = re.search(
-            r'(\d{3,5})',
+        number_matches = re.findall(
+            r'\d{3,5}',
             text
         )
 
-        if amount_match:
+        filtered_numbers = []
 
-            amount = amount_match.group(1)
+        for num in number_matches:
+
+            value = int(num)
+
+            if 100 <= value <= 10000:
+
+                filtered_numbers.append(value)
+
+        if filtered_numbers:
+
+            amount = max(filtered_numbers)
 
     # --------------------------------
     # SHOW EXTRACTED DATA
@@ -169,8 +247,6 @@ if uploaded_file:
     st.success(
         "Excel Generated Successfully!"
     )
-
-    st.balloons()
 
     # --------------------------------
     # DOWNLOAD BUTTON
